@@ -34,8 +34,8 @@ Hide-in-the-crowd game. One player is the **Police**; all other players are **Hi
 ### Roles
 | Role | Count | Objective | Wins when |
 |---|---|---|---|
-| Police | 1 player | Spot which characters are real players and arrest them | All hiders are arrested |
-| Hider | all other players | Blend in with NPCs and complete their secret objectives | All objectives are done, or the round timer runs out (TBD) |
+| Police | 1 player | Spot which characters are real players and arrest them | All hiders still in the game are arrested (ends the game right away), or the timer runs out and no hider won |
+| Hider | all other players | Blend in with NPCs and complete their secret objectives | When the timer runs out: all their objectives are done and they weren't arrested (each hider wins or loses individually) |
 | NPC | server-controlled | Wander, idle and interact like a crowd, so hiders are hard to spot | – |
 
 ### Objectives (hiders)
@@ -52,21 +52,25 @@ Hide-in-the-crowd game. One player is the **Police**; all other players are **Hi
 1. **Lobby**: host sets settings, players ready up
 2. **Role reveal**: each player privately sees their role and, for hiders, their objectives (`game:role`)
 3. **Play**: hiders move among NPCs and complete objectives; the police watches and arrests
-4. **End**: when a win condition is met; `game:ended` reveals which characters were players
+4. **End**: when the timer runs out (`gameResults` in `server/game.js`): `game:ended` reveals the results and which characters were players, then everyone is back in the lobby (`lobby:state`, all un-readied)
+   - Finishing all objectives early doesn't end anything: the hider still has to avoid arrest until the timer runs out
+   - A player who left mid-game loses
 
 ### Rules
-- Arresting an NPC costs the police tokens (see Police tokens)
-- An arrested character is removed from the map, whether it's a hider or an NPC
-- An arrested hider is out of the game: they can't move, interact or complete objectives anymore (TBD: spectate?)
+- **Arresting**: the police walks up to someone, faces them (walking into them turns you to face them) and presses **E**. The target is whoever is on the tile the police is facing
+- Arresting an NPC costs the police tokens (see Police tokens); arresting a hider is free
+- An arrested character is removed from the map, whether it's a hider or an NPC (server keeps it with `arrested: true`)
+- An arrested hider is out of the game: they can't move, interact or complete objectives anymore, and lose. They spectate with a free camera (WASD)
 - Round time, NPC count and starting tokens are lobby settings
 - The server checks win conditions after every arrest and completed objective
 
 ### Police tokens
 - The police's starting tokens are a lobby setting (`startingTokens`, set by the host)
-- Arresting an NPC by mistake costs tokens (TBD: how many)
+- Arresting an NPC by mistake costs `WRONG_ARREST_COST` tokens (3, in `shared/gameRules.js`; never below 0)
+- At 0 tokens the police can't arrest anymore
 - Tokens are spent on abilities and calling in backup (TBD: list of abilities, backup and their costs)
 - The server tracks tokens; the client only displays them
-- TBD: can tokens be earned (e.g. by arresting a hider)? What happens at 0 tokens?
+- TBD: can tokens be earned (e.g. by arresting a hider)?
 
 ### Movement
 - Everyone (police, hiders, NPCs) moves one tile at a time, 4 directions, 250 ms per tile (`STEP_TICKS` × `TICK_MS` in `server/simulation.js`)
@@ -156,7 +160,7 @@ Client → server requests use Socket.IO acknowledgements: `callback({ ok: true,
 | `game:move` | `{ direction }` (`up`/`down`/`left`/`right`, or `null` to stop) | Sent when the held direction changes; server moves the character tile by tile |
 | `game:interact` | – | Hiders only (E): do the action of the objective spot you're on |
 | `game:circles` | – | Hiders only (R): run in circles here |
-| `game:arrest` | `{ characterId }` | Police only |
+| `game:arrest` | – | Police only (E): arrest whoever is on the tile you're facing. Ack: `{ wasPlayer, tokens }` |
 | `game:ability` | `{ abilityId, targetId? }` | Police only; server checks and deducts tokens |
 | `chat:send` | `{ text }` | |
 
@@ -173,7 +177,7 @@ Client → server requests use Socket.IO acknowledgements: `callback({ ok: true,
 | `game:objective` | `{ objectiveId, done }` | **Only that hider** |
 | `game:arrested` | `{ characterId, wasPlayer }` | Everyone in game |
 | `game:tokens` | `{ tokens }` | **Only the police** |
-| `game:ended` | `{ winner, reveal }` | Everyone in game |
+| `game:ended` | `{ reason: 'time' | 'arrested', policeWon, results: [{ playerId, name, role, characterId, left, won, objectivesDone?, objectivesTotal?, arrested? }] }` (followed by `lobby:state`) | Everyone in game |
 | `chat:message` | `{ playerId, text }` | Allowed recipients |
 
 ## Current focus
@@ -182,6 +186,8 @@ Client → server requests use Socket.IO acknowledgements: `callback({ ok: true,
 - [x] `game:start`: roles, characters on the map, HUD (role, objectives, timer, tokens)
 - [x] Movement (`game:move`, `character:moved`) and NPC wandering
 - [x] Objectives: spot actions (E), running in circles (R), NPCs doing the same actions
-- [ ] Arresting, round end / win conditions
+- [x] Round end on timer, results + reveal, back to lobby
+- [x] Arresting (E), token cost for NPCs, spectating when arrested, police winning early
+- [ ] Police abilities and backup (tokens), leaving/rejoining mid-game, real police sprite
 - Sprite integration for canvas
 - Setting up socket connections
