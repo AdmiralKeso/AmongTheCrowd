@@ -1,5 +1,5 @@
 import * as Phaser from 'phaser';
-import { socket } from '../socket.js';
+import { request, socket } from '../socket.js';
 import { characterFrame, flipForDirection, walkAnimationKey } from '../sprites.js';
 
 const ZOOM_MIN = 1;
@@ -17,6 +17,8 @@ const PAN_SPEED = 400; // screen pixels per second
 // Characters use CHARACTER_DEPTH + y so lower ones are drawn in front.
 export const CHARACTER_DEPTH = 100;
 const LAYER_DEPTHS = { ground: 0, decoration: 1, walls: 2, details: 3, above: 100000 };
+// Shown above a character during a spot action (placeholder until there are action sprites).
+const ACTION_EMOTES = { sit: '💤', look: '👀', knock: '✊', post: '✉️', buy: '🛒' };
 const MARKER_COLORS = { police: 0x3a6ee8, objective: 0x3ae86b, npcPoint: 0xe83a9c };
 
 export class GameScene extends Phaser.Scene {
@@ -75,8 +77,13 @@ export class GameScene extends Phaser.Scene {
     }
 
     const onMoved = (move) => this.moveCharacter(move);
+    const onAction = (action) => this.showAction(action);
     socket.on('character:moved', onMoved);
-    this.events.once('shutdown', () => socket.off('character:moved', onMoved));
+    socket.on('character:action', onAction);
+    this.events.once('shutdown', () => {
+      socket.off('character:moved', onMoved);
+      socket.off('character:action', onAction);
+    });
 
     // Only this client knows which character is theirs; mark it locally and follow it.
     this.mine = this.characters.get(this.role?.characterId);
@@ -84,7 +91,34 @@ export class GameScene extends Phaser.Scene {
       this.arrow = this.add.triangle(0, 0, 0, 0, 6, 0, 3, 4, 0xffe066).setDepth(LAYER_DEPTHS.above + 1);
       this.cameras.main.startFollow(this.mine, true);
       this.setupMovementInput();
+      if (this.role.role === 'hider') this.setupObjectiveInput();
     }
+  }
+
+  // E: do the action of the spot you're on. R: run in circles.
+  setupObjectiveInput() {
+    const send = async (event) => {
+      const res = await request(event);
+      if (!res.ok && this.sys.isActive()) this.scene.get('UIScene').showMessage(res.error);
+    };
+    this.input.keyboard.on('keydown-E', () => send('game:interact'));
+    this.input.keyboard.on('keydown-R', () => send('game:circles'));
+  }
+
+  // character:action — someone (NPC or player) does a spot action: face that way and show an emote.
+  showAction({ characterId, action, direction, duration }) {
+    const sprite = this.characters.get(characterId);
+    if (!sprite) return;
+    sprite.idleTimer?.remove();
+    sprite.anims.stop();
+    sprite.setFlipX(flipForDirection(direction));
+    sprite.setFrame(characterFrame(sprite.appearanceId, direction));
+
+    const emote = this.add.text(sprite.x, sprite.y - 12, ACTION_EMOTES[action] ?? '…', {
+      fontFamily: 'sans-serif', fontSize: '8px', color: '#ffffff', resolution: 8,
+      backgroundColor: 'rgba(0,0,0,0.6)', padding: { x: 1, y: 0 },
+    }).setOrigin(0.5, 1).setDepth(LAYER_DEPTHS.above + 1);
+    this.time.delayedCall(duration, () => emote.destroy());
   }
 
   // Held direction keys, most recent last. The server gets the current one whenever it changes.
