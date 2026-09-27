@@ -39,9 +39,14 @@ Hide-in-the-crowd game. One player is the **Police**; all other players are **Hi
 | NPC | server-controlled | Wander, idle and interact like a crowd, so hiders are hard to spot | – |
 
 ### Objectives (hiders)
-- Each hider gets their own secret objectives, e.g. go to a location or interact with an object (TBD: exact list)
+- Types are defined in `shared/objectives.js`: sit on a bench, look into a window, knock on a door, post a letter (mailbox), buy at a stall, run in circles
+- Each hider gets 3 different types (`OBJECTIVES_PER_HIDER`). An objective is a **type**, done at **any** spot of that type (`objectiveId` = the type)
+- **E**: stand on an objective spot (map `objectives` layer) and press E → the character faces the spot and does the action for 3 s (`ACTION_TICKS`)
+- **R**: run in circles: 2 laps around a 2×2 square wherever there's room; interrupted laps don't count
+- An objective counts when the action finishes. Hiders may do any action anywhere, even if it's not their objective, to blend in
 - Doing an objective can look "unnatural", which is the risk hiders take
-- NPCs also do these actions sometimes, so doing them isn't automatic proof
+- NPCs do the same actions: they usually (70%) do the spot's action when they arrive on one, and sometimes run in circles while idle, so doing one isn't proof
+- Player actions are queued and start on the next tick, like NPC actions, so timing never reveals a player
 
 ### Game flow
 1. **Lobby**: host sets settings, players ready up
@@ -149,7 +154,8 @@ Client → server requests use Socket.IO acknowledgements: `callback({ ok: true,
 | `lobby:ready` | `{ ready }` | |
 | `game:start` | – | Host only, all players ready, at least `MIN_PLAYERS`. Server sends `game:role` to each player (+ `game:tokens` to police), then `game:state` to everyone |
 | `game:move` | `{ direction }` (`up`/`down`/`left`/`right`, or `null` to stop) | Sent when the held direction changes; server moves the character tile by tile |
-| `game:interact` | `{ objectId }` | Hider does an objective action; server validates range |
+| `game:interact` | – | Hiders only (E): do the action of the objective spot you're on |
+| `game:circles` | – | Hiders only (R): run in circles here |
 | `game:arrest` | `{ characterId }` | Police only |
 | `game:ability` | `{ abilityId, targetId? }` | Police only; server checks and deducts tokens |
 | `chat:send` | `{ text }` | |
@@ -163,6 +169,7 @@ Client → server requests use Socket.IO acknowledgements: `callback({ ok: true,
 | `game:state` | `{ phase, endsAt, characters: [{ characterId, appearanceId, x, y }] }` (no player mapping; `endsAt` is a timestamp in ms) | Everyone in game |
 | `game:phase` | `{ phase, endsAt }` | Everyone in game |
 | `character:moved` | `{ characterId, x, y, direction, duration }` (`x, y` = target tile center; `duration` 0 = turned on the spot) | Everyone in game (NPCs and players alike) |
+| `character:action` | `{ characterId, action, direction, duration }` (`action`: `sit`, `look`, `knock`, `post`, `buy`) | Everyone in game (NPCs and players alike) |
 | `game:objective` | `{ objectiveId, done }` | **Only that hider** |
 | `game:arrested` | `{ characterId, wasPlayer }` | Everyone in game |
 | `game:tokens` | `{ tokens }` | **Only the police** |
@@ -174,6 +181,7 @@ Client → server requests use Socket.IO acknowledgements: `callback({ ok: true,
 - [x] Lobby + room codes (create/join, ready, kick, host settings, host hand-over)
 - [x] `game:start`: roles, characters on the map, HUD (role, objectives, timer, tokens)
 - [x] Movement (`game:move`, `character:moved`) and NPC wandering
-- [ ] Interacting with objectives, arresting, round end
+- [x] Objectives: spot actions (E), running in circles (R), NPCs doing the same actions
+- [ ] Arresting, round end / win conditions
 - Sprite integration for canvas
 - Setting up socket connections
