@@ -1,4 +1,5 @@
-import { LobbyError, lobbyState } from '../lobbies.js';
+import { lobbyState } from '../lobbies.js';
+import { onRequest } from './ack.js';
 
 export function registerLobbyHandlers(io, socket, lobbies) {
   const playerId = socket.id;
@@ -7,23 +8,7 @@ export function registerLobbyHandlers(io, socket, lobbies) {
     if (lobby.players.size > 0) io.to(lobby.code).emit('lobby:state', lobbyState(lobby));
   };
 
-  // Every client → server event answers through the acknowledgement: { ok: true, ... } or { ok: false, error }.
-  const on = (event, handler) => {
-    socket.on(event, (payload, callback) => {
-      if (typeof callback !== 'function') return;
-      const data = payload && typeof payload === 'object' ? payload : {};
-      try {
-        callback({ ok: true, ...handler(data) });
-      } catch (err) {
-        if (err instanceof LobbyError) {
-          callback({ ok: false, error: err.message });
-        } else {
-          console.error(`${event} failed:`, err);
-          callback({ ok: false, error: 'Something went wrong on the server' });
-        }
-      }
-    });
-  };
+  const on = (event, handler) => onRequest(socket, event, handler);
 
   on('lobby:create', ({ name }) => {
     const lobby = lobbies.create(playerId, name);

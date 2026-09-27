@@ -1,5 +1,5 @@
 import { randomInt } from 'node:crypto';
-import { CODE_LENGTH, MAX_PLAYERS, NAME_MAX_LENGTH, SETTINGS, defaultSettings } from '../shared/lobbyRules.js';
+import { CODE_LENGTH, MAX_PLAYERS, MIN_PLAYERS, NAME_MAX_LENGTH, SETTINGS, defaultSettings } from '../shared/lobbyRules.js';
 
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // no I or O, they look like 1 and 0
 
@@ -18,6 +18,7 @@ export class LobbyManager {
       hostId: playerId,
       players: new Map(), // playerId -> { id, name, ready }
       settings: defaultSettings(),
+      game: null, // set by startGame; holds hidden info, never send it as-is
     };
     this.#lobbies.set(lobby.code, lobby);
     this.#addPlayer(lobby, playerId, name);
@@ -28,6 +29,7 @@ export class LobbyManager {
     this.#assertNotInLobby(playerId);
     const lobby = this.#lobbies.get(String(code ?? '').trim().toUpperCase());
     if (!lobby) throw new LobbyError('Lobby not found');
+    if (lobby.game) throw new LobbyError('This game has already started');
     if (lobby.players.size >= MAX_PLAYERS) throw new LobbyError('Lobby is full');
     this.#addPlayer(lobby, playerId, name);
     return lobby;
@@ -51,6 +53,7 @@ export class LobbyManager {
 
   kick(hostId, targetId) {
     const lobby = this.#requireHost(hostId);
+    this.#assertNotInGame(lobby);
     if (targetId === hostId) throw new LobbyError("You can't kick yourself");
     if (!lobby.players.has(targetId)) throw new LobbyError('Player is not in this lobby');
     this.leave(targetId);
@@ -59,12 +62,14 @@ export class LobbyManager {
 
   setReady(playerId, ready) {
     const lobby = this.#require(playerId);
+    this.#assertNotInGame(lobby);
     lobby.players.get(playerId).ready = ready === true;
     return lobby;
   }
 
   updateSettings(hostId, changes) {
     const lobby = this.#requireHost(hostId);
+    this.#assertNotInGame(lobby);
     for (const [key, value] of Object.entries(changes)) {
       if (!Object.hasOwn(SETTINGS, key)) throw new LobbyError(`Unknown setting: ${key}`);
       const rule = SETTINGS[key];
@@ -75,6 +80,17 @@ export class LobbyManager {
     Object.assign(lobby.settings, changes);
     // Everyone must confirm again after the rules change.
     for (const player of lobby.players.values()) player.ready = false;
+    return lobby;
+  }
+
+  // createGame(lobby) builds the game state (see server/game.js).
+  startGame(hostId, createGame) {
+    const lobby = this.#requireHost(hostId);
+    this.#assertNotInGame(lobby);
+    const players = [...lobby.players.values()];
+    if (players.length < MIN_PLAYERS) throw new LobbyError(`You need at least ${MIN_PLAYERS} players`);
+    if (!players.every((p) => p.ready)) throw new LobbyError('Not everyone is ready');
+    lobby.game = createGame(lobby);
     return lobby;
   }
 
@@ -96,6 +112,10 @@ export class LobbyManager {
 
   #assertNotInLobby(playerId) {
     if (this.#playerLobby.has(playerId)) throw new LobbyError('You are already in a lobby');
+  }
+
+  #assertNotInGame(lobby) {
+    if (lobby.game) throw new LobbyError('The game has already started');
   }
 
   #require(playerId) {
