@@ -6,12 +6,15 @@ Real-time multiplayer hide-in-the-crowd game (one police vs. hiders disguised as
 ## Commands
 - `npm run dev` — start server with auto-restart on file changes (http://localhost:3000)
 - `npm start` — start server
+- http://localhost:3000/?test=map — open the map directly with a debug overlay (spawns, objectives, NPC points, collision)
 - Tests: not set up yet
 
 ## Architecture
 - `server/index.js` — Express app + Socket.IO server; serves `client/` and `shared/` as static files
 - `server/lobbies.js` — in-memory `LobbyManager` (lobby logic, validation); throws `LobbyError` with player-facing messages
-- `server/handlers/` — Socket.IO event handlers, one file per namespace (e.g. `lobby.js`)
+- `server/game.js` — `createGame` (roles, characters, objectives), `publicState` (safe for everyone), `roleFor` (private per player). The game object lives on `lobby.game`
+- `server/maps.js` — `loadMap(name)` reads the same Tiled JSON the client renders (collision, spawns, objectives, NPC points)
+- `server/handlers/` — Socket.IO event handlers, one file per namespace (`lobby.js`, `game.js`); `ack.js` has `onRequest` for acknowledged requests
 - `shared/` — code used by both server and client (e.g. `lobbyRules.js`: player limits, settings min/max/defaults). Client imports it as `/shared/...`
 - `client/` — Phaser frontend (`client/src/scenes/`, `client/assets/`)
 - **No bundler (no Vite/webpack).** The client is plain ES modules loaded directly by the browser
@@ -87,25 +90,35 @@ Hide-in-the-crowd game. One player is the **Police**; all other players are **Hi
 - The server never sends image data, only `appearanceId` per character; the client maps it to a sprite sheet key
 - Animation state (idle/walk/interact) is decided by the client from movement, so it looks the same for NPCs and hiders
 - Hiders and NPCs draw from the **same** pool of appearances, so a sprite never gives away a player
-- The police has its own sprite
+- The police has its own sprite (placeholder: Kenney character 3, the blue-haired one, until there's a real police sprite)
+- Appearance ids are in `shared/appearances.js`; `client/src/sprites.js` maps them to frames of the `kenney` spritesheet (the tileset image cut into 16×16 frames)
 - Movement from the server (`character:moved`) is smoothed with interpolation (tweens), not snapped
 - Characters are drawn top-down with 4 directions: animations per direction, e.g. `civilian3-walk-down`, `civilian3-walk-left`
 - Art: **Kenney "RPG Urban Pack"** (https://kenney.nl/assets/rpg-urban-pack), 16×16 pixel art, CC0 (free, no attribution required)
-- Tile and sprite size: **16×16**; the camera zooms by whole numbers (e.g. 3×) to keep pixels sharp
+- Tile and sprite size: **16×16**; the camera zooms by whole numbers only, to keep pixels sharp. Default zoom depends on window width so about 24 tiles are visible across (`defaultZoom` in `GameScene.js`)
 - Keep Kenney's original files in `client/assets/vendor/kenney-rpg-urban/` and copy what's used into `sprites/` and `tilesets/`
 
 ### Map
 - Top-down view, made in **Tiled** and exported as JSON
 - Files: `client/assets/maps/<map>.json` + tilesets in `client/assets/tilesets/`; load with `this.load.tilemapTiledJSON` and `this.load.image`
+- Current test map: `city.json` (40×30 tiles, 4 blocks around a crossroads). Tileset `city` = `client/assets/tilesets/city.png` (Kenney `tilemap_packed.png`, 27 columns, no spacing)
 - Embed tilesets in the map (Tiled: "Embed tileset"); Phaser can't load external `.tsx` files
-- Tile layers (bottom to top): `ground`, `decoration`, `walls`, `above` (drawn over characters, e.g. treetops, roofs)
+- Tile layers (bottom to top), all drawn under characters except `above`:
+  - `ground`: sidewalk, roads
+  - `decoration`: flat things on the ground (grass patches, benches)
+  - `walls`: roofs, brick fronts, tree trunks, lamp posts, props that block movement
+  - `details`: doors and windows on top of brick walls, props on top of `decoration`
+  - `above`: drawn over characters (treetops, lamp heads)
 - Collision: tiles with the custom property `collides: true` on the `walls` layer
+- Road tiles have the custom property `road: true` (nobody spawns on them)
+- Keep tile layer format as CSV in Tiled (not Base64/compressed): the server reads the data array directly
 - Object layers:
-  - `spawns`: spawn points (`type`: `police`, `hider`, `npc`)
-  - `objectives`: interactable objects (`objectId`, `type`)
-  - `npcPoints`: places NPCs wander to (benches, shops, ...)
+  - `spawns`: points, `type`: `police` only. **Hiders and NPCs have no spawn points**: they start together on random walkable non-road tiles, so start positions never reveal a player
+  - `objectives`: 16×16 rectangles on the tile where the character stands to interact; `name` = objectId (unique, e.g. `bench-park-1`), `type` = kind (`bench`, `door`, `mailbox`, `stall`)
+  - `npcPoints`: points NPCs wander to, `type` = kind of place (`bench`, `park`, `corner`, ...)
 - The server loads the same map JSON for collision, spawns and objective positions, so client and server always agree
-- Characters are depth-sorted by their y position, so lower characters are drawn in front
+- Characters are depth-sorted by their y position, so lower characters are drawn in front (`CHARACTER_DEPTH + y` in `GameScene.js`)
+- Characters in the Kenney tileset: 6 characters in columns 23–26 (one column per direction), 3 rows each (idle + 2 walk frames); first rows 0, 3, 6, 9, 12, 15
 
 ## Conventions
 - Server is authoritative; clients never decide game outcomes
@@ -124,7 +137,7 @@ Client → server requests use Socket.IO acknowledgements: `callback({ ok: true,
 | `lobby:kick` | `{ playerId }` | Host only |
 | `lobby:settings` | `{ ...settings }` | Host only; validated against `shared/lobbyRules.js`; resets everyone's ready state |
 | `lobby:ready` | `{ ready }` | |
-| `game:start` | – | Host only, all players ready |
+| `game:start` | – | Host only, all players ready, at least `MIN_PLAYERS`. Server sends `game:role` to each player (+ `game:tokens` to police), then `game:state` to everyone |
 | `game:move` | `{ x, y }` | Canvas position; server validates |
 | `game:interact` | `{ objectId }` | Hider does an objective action; server validates range |
 | `game:arrest` | `{ characterId }` | Police only |
@@ -136,8 +149,8 @@ Client → server requests use Socket.IO acknowledgements: `callback({ ok: true,
 |---|---|---|
 | `lobby:state` | `{ code, hostId, players: [{ id, name, ready }], settings }` | Everyone in lobby |
 | `lobby:kicked` | – | **Only the kicked player** |
-| `game:role` | `{ role, characterId?, objectives? }` | **Only that player** |
-| `game:state` | `{ characters: [{ characterId, appearanceId, x, y }], timeLeft, ... }` (no player mapping) | Everyone in game |
+| `game:role` | `{ role, characterId, objectives? }` (`objectives: [{ objectiveId, type, done }]` for hiders) | **Only that player** |
+| `game:state` | `{ phase, endsAt, characters: [{ characterId, appearanceId, x, y }] }` (no player mapping; `endsAt` is a timestamp in ms) | Everyone in game |
 | `game:phase` | `{ phase, endsAt }` | Everyone in game |
 | `character:moved` | `{ characterId, x, y }` | Everyone in game (NPCs and hiders alike) |
 | `game:objective` | `{ objectiveId, done }` | **Only that hider** |
@@ -149,6 +162,7 @@ Client → server requests use Socket.IO acknowledgements: `callback({ ok: true,
 ## Current focus
 - Main menu (Create a lobby, Join a lobby, Settings, Profile (Create account, login))
 - [x] Lobby + room codes (create/join, ready, kick, host settings, host hand-over)
-- [ ] `game:start` (button exists, server handler not built yet)
+- [x] `game:start`: roles, characters on the map, HUD (role, objectives, timer, tokens)
+- [ ] Movement (`game:move`, `character:moved`), NPC wandering, interacting, arresting, round end
 - Sprite integration for canvas
 - Setting up socket connections
