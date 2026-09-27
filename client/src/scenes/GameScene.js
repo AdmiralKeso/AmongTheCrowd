@@ -1,6 +1,7 @@
 import * as Phaser from 'phaser';
 import { request, socket } from '../socket.js';
 import { characterFrame, flipForDirection, walkAnimationKey } from '../sprites.js';
+import { WRONG_ARREST_COST } from '/shared/gameRules.js';
 
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 8;
@@ -76,13 +77,16 @@ export class GameScene extends Phaser.Scene {
       this.characters.set(characterId, sprite);
     }
 
-    const onMoved = (move) => this.moveCharacter(move);
-    const onAction = (action) => this.showAction(action);
-    socket.on('character:moved', onMoved);
-    socket.on('character:action', onAction);
+    const listeners = {
+      'character:moved': (move) => this.moveCharacter(move),
+      'character:action': (action) => this.showAction(action),
+      'game:arrested': (arrest) => this.removeArrested(arrest),
+      'game:ended': (ended) => this.endGame(ended),
+      'lobby:state': (lobby) => { this.lobby = lobby; }, // sent right after game:ended, for "Back to lobby"
+    };
+    for (const [event, fn] of Object.entries(listeners)) socket.on(event, fn);
     this.events.once('shutdown', () => {
-      socket.off('character:moved', onMoved);
-      socket.off('character:action', onAction);
+      for (const [event, fn] of Object.entries(listeners)) socket.off(event, fn);
     });
 
     // Only this client knows which character is theirs; mark it locally and follow it.
@@ -92,6 +96,7 @@ export class GameScene extends Phaser.Scene {
       this.cameras.main.startFollow(this.mine, true);
       this.setupMovementInput();
       if (this.role.role === 'hider') this.setupObjectiveInput();
+      if (this.role.role === 'police') this.setupArrestInput();
     }
   }
 
@@ -103,6 +108,60 @@ export class GameScene extends Phaser.Scene {
     };
     this.input.keyboard.on('keydown-E', () => send('game:interact'));
     this.input.keyboard.on('keydown-R', () => send('game:circles'));
+  }
+
+  // Police E: arrest whoever you're facing.
+  setupArrestInput() {
+    this.input.keyboard.on('keydown-E', async () => {
+      const res = await request('game:arrest');
+      if (!this.sys.isActive()) return;
+      const ui = this.scene.get('UIScene');
+      if (!res.ok) ui.showMessage(res.error);
+      else if (res.wasPlayer) ui.showMessage('You caught a hider!');
+      else ui.showMessage(`That was an NPC! -${WRONG_ARREST_COST} tokens`);
+    });
+  }
+
+  // game:arrested — the character is taken off the map. If it's yours, you're out and can look around.
+  removeArrested({ characterId }) {
+    const sprite = this.characters.get(characterId);
+    if (!sprite) return;
+    this.characters.delete(characterId);
+    sprite.moveTween?.stop();
+    sprite.idleTimer?.remove();
+    const siren = this.add.text(sprite.x, sprite.y - 10, '🚨', { fontSize: '8px', resolution: 8 })
+      .setOrigin(0.5, 1).setDepth(LAYER_DEPTHS.above + 1);
+    this.tweens.add({
+      targets: [sprite, siren],
+      alpha: 0,
+      delay: 600,
+      duration: 400,
+      onComplete: () => { sprite.destroy(); siren.destroy(); },
+    });
+
+    if (characterId === this.role?.characterId) {
+      this.spectating = true;
+      this.arrow?.destroy();
+      this.arrow = null;
+      this.cameras.main.stopFollow();
+      this.scene.get('UIScene').showMessage("You've been arrested! You're out. Use WASD to look around.");
+    }
+  }
+
+  // game:ended — label the players' characters on the map and show the results.
+  endGame(ended) {
+    for (const r of ended.results) {
+      const sprite = this.characters.get(r.characterId);
+      if (!sprite) continue;
+      const color = r.role === 'police' ? '#6fa0ff' : '#ffd966';
+      this.add.text(sprite.x, sprite.y - 10, r.name, {
+        fontFamily: 'monospace', fontSize: '8px', color, resolution: 8,
+        backgroundColor: 'rgba(0,0,0,0.7)', padding: { x: 2, y: 1 },
+      }).setOrigin(0.5, 1).setDepth(LAYER_DEPTHS.above + 2);
+    }
+    this.scene.get('UIScene').showResults(ended, () => {
+      if (this.lobby) this.scene.start('LobbyScene', { lobby: this.lobby });
+    });
   }
 
   // character:action — someone (NPC or player) does a spot action: face that way and show an emote.
@@ -195,8 +254,8 @@ export class GameScene extends Phaser.Scene {
       this.arrow.setPosition(this.mine.x, this.mine.y - 12 + Math.sin(time / 150));
     }
 
-    // Free camera only in the ?test=map preview; in a game the keys walk your character.
-    if (!this.debug) return;
+    // Free camera in the ?test=map preview and when you've been arrested; otherwise the keys walk your character.
+    if (!this.debug && !this.spectating) return;
     const { W, A, S, D, UP, LEFT, DOWN, RIGHT } = this.keys;
     const camera = this.cameras.main;
     const step = (PAN_SPEED * delta) / 1000 / camera.zoom;

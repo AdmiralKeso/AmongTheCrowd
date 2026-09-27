@@ -1,4 +1,5 @@
 import * as Phaser from 'phaser';
+import { WRONG_ARREST_COST } from '/shared/gameRules.js';
 import { OBJECTIVE_TYPES } from '/shared/objectives.js';
 import { socket } from '../socket.js';
 import { escapeHtml } from '../ui.js';
@@ -53,6 +54,42 @@ export class UIScene extends Phaser.Scene {
     this.render();
   }
 
+  // game:ended — results panel in the middle of the screen. onBack: "Back to lobby" clicked.
+  showResults({ reason, policeWon, results }, onBack) {
+    const me = results.find((r) => r.playerId === socket.id);
+    const title = { time: "Time's up!", arrested: 'All hiders caught!' }[reason] ?? 'Game over';
+    const headline = me?.won ? 'You win!' : 'You lose';
+    const detail = reason === 'arrested'
+      ? 'The police arrested every hider.'
+      : policeWon ? 'The police wins: no hider completed all objectives.' : 'Hiders who completed all their objectives win.';
+
+    const status = (r) => {
+      if (r.left) return 'left';
+      if (r.role === 'hider' && r.arrested) return 'arrested';
+      return r.won ? 'won' : 'lost';
+    };
+    const rows = results.map((r) => `
+      <li>
+        <span class="name">${escapeHtml(r.name)}${r.playerId === socket.id ? ' (you)' : ''}</span>
+        <span class="tag ${r.role === 'police' ? 'host' : ''}">${r.role}</span>
+        ${r.role === 'hider' ? `<span class="tag">${r.objectivesDone}/${r.objectivesTotal}</span>` : ''}
+        <span class="tag ${r.won ? 'ready' : ''}">${status(r)}</span>
+      </li>`).join('');
+
+    const panel = document.createElement('div');
+    panel.className = 'panel results';
+    panel.innerHTML = `
+      <h1>${title}</h1>
+      <p class="subtitle"><b>${headline}</b><br>${detail}</p>
+      <ul>${rows}</ul>
+      <p class="hint">Players are labelled on the map.</p>
+      <div class="row"><button data-action="lobby">Back to lobby</button></div>
+    `;
+    panel.querySelector('[data-action="lobby"]').addEventListener('click', onBack);
+    document.getElementById('game').appendChild(panel);
+    this.events.once('shutdown', () => panel.remove());
+  }
+
   // Short message at the bottom of the screen, e.g. why an action didn't work.
   showMessage(text) {
     this.message.textContent = text;
@@ -67,7 +104,9 @@ export class UIScene extends Phaser.Scene {
 
     const body = isPolice
       ? `<p>Find the hiders in the crowd and arrest them.</p>
-         <p>Tokens: <b>${this.tokens ?? '?'}</b></p>`
+         <p>Tokens: <b>${this.tokens ?? '?'}</b></p>
+         <p class="hud-keys"><b>E</b> arrest the person you're facing<br>
+         Arresting an NPC costs ${WRONG_ARREST_COST} tokens. At 0 tokens you can't arrest anymore.</p>`
       : `<p>Blend in and complete your objectives:</p>
          <ul>${objectives.map((o) => `
            <li class="${o.done ? 'done' : ''}">${escapeHtml(OBJECTIVE_TYPES[o.type]?.text ?? o.type)}</li>`).join('')}
