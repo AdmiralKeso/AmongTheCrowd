@@ -1,4 +1,5 @@
 import * as Phaser from 'phaser';
+import { createCharacterAnimations } from '../sprites.js';
 
 export class PreloadScene extends Phaser.Scene {
   constructor() {
@@ -18,7 +19,7 @@ export class PreloadScene extends Phaser.Scene {
   }
 
   create() {
-    // Create animations here with this.anims.create(...)
+    createCharacterAnimations(this.anims);
 
     // Dev shortcut: http://localhost:3000/?test=map opens the map with debug overlay.
     if (new URLSearchParams(location.search).get('test') === 'map') {

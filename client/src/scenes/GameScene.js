@@ -1,5 +1,6 @@
 import * as Phaser from 'phaser';
-import { characterFrame } from '../sprites.js';
+import { socket } from '../socket.js';
+import { characterFrame, flipForDirection, walkAnimationKey } from '../sprites.js';
 
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 8;
@@ -65,24 +66,103 @@ export class GameScene extends Phaser.Scene {
 
   createCharacters() {
     this.characters = new Map(); // characterId -> sprite
-    for (const { characterId, appearanceId, x, y } of this.state.characters) {
-      const sprite = this.add.sprite(x, y, 'kenney', characterFrame(appearanceId, 'down'))
+    for (const { characterId, appearanceId, x, y, direction } of this.state.characters) {
+      const sprite = this.add.sprite(x, y, 'kenney', characterFrame(appearanceId, direction))
+        .setFlipX(flipForDirection(direction))
         .setDepth(CHARACTER_DEPTH + y);
+      sprite.appearanceId = appearanceId;
       this.characters.set(characterId, sprite);
     }
 
-    // Only this client knows which character is theirs; mark it locally.
-    const mine = this.characters.get(this.role?.characterId);
-    if (mine) {
-      const arrow = this.add.triangle(mine.x, mine.y - 12, 0, 0, 6, 0, 3, 4, 0xffe066)
-        .setDepth(LAYER_DEPTHS.above + 1);
-      this.tweens.add({ targets: arrow, y: arrow.y - 2, duration: 400, yoyo: true, repeat: -1 });
-      this.cameras.main.centerOn(mine.x, mine.y);
+    const onMoved = (move) => this.moveCharacter(move);
+    socket.on('character:moved', onMoved);
+    this.events.once('shutdown', () => socket.off('character:moved', onMoved));
+
+    // Only this client knows which character is theirs; mark it locally and follow it.
+    this.mine = this.characters.get(this.role?.characterId);
+    if (this.mine) {
+      this.arrow = this.add.triangle(0, 0, 0, 0, 6, 0, 3, 4, 0xffe066).setDepth(LAYER_DEPTHS.above + 1);
+      this.cameras.main.startFollow(this.mine, true);
+      this.setupMovementInput();
     }
   }
 
+  // Held direction keys, most recent last. The server gets the current one whenever it changes.
+  setupMovementInput() {
+    const keyDirections = {
+      W: 'up', UP: 'up', S: 'down', DOWN: 'down', A: 'left', LEFT: 'left', D: 'right', RIGHT: 'right',
+    };
+    const held = []; // key names, most recently pressed last
+    let sent = null;
+
+    const sendIfChanged = () => {
+      const direction = keyDirections[held.at(-1)] ?? null;
+      if (direction === sent) return;
+      sent = direction;
+      socket.emit('game:move', { direction });
+    };
+
+    for (const keyName of Object.keys(keyDirections)) {
+      const key = this.keys[keyName];
+      key.on('down', () => {
+        if (!held.includes(keyName)) held.push(keyName); // ignore key auto-repeat
+        sendIfChanged();
+      });
+      key.on('up', () => {
+        const i = held.indexOf(keyName);
+        if (i !== -1) held.splice(i, 1);
+        sendIfChanged();
+      });
+    }
+
+    // Don't keep walking when the window loses focus with a key held down.
+    const release = () => { held.length = 0; sendIfChanged(); };
+    this.game.events.on('blur', release);
+    this.events.once('shutdown', () => this.game.events.off('blur', release));
+  }
+
+  // character:moved — the same for NPCs and players. duration 0 means turning on the spot.
+  moveCharacter({ characterId, x, y, direction, duration }) {
+    const sprite = this.characters.get(characterId);
+    if (!sprite) return;
+
+    sprite.setFlipX(flipForDirection(direction));
+    sprite.idleTimer?.remove();
+
+    if (duration === 0) {
+      sprite.anims.stop();
+      sprite.setFrame(characterFrame(sprite.appearanceId, direction));
+      return;
+    }
+
+    sprite.play(walkAnimationKey(sprite.appearanceId, direction), true);
+    sprite.moveTween?.stop();
+    if (Phaser.Math.Distance.Between(sprite.x, sprite.y, x, y) > TILE_SIZE * 2) {
+      sprite.setPosition(x, y); // too far behind (e.g. tab was in the background): snap
+    }
+    sprite.moveTween = this.tweens.add({
+      targets: sprite,
+      x,
+      y,
+      duration,
+      onUpdate: () => sprite.setDepth(CHARACTER_DEPTH + sprite.y),
+      onComplete: () => {
+        // Stop the walk animation unless the next step arrives right away.
+        sprite.idleTimer = this.time.delayedCall(80, () => {
+          sprite.anims.stop();
+          sprite.setFrame(characterFrame(sprite.appearanceId, direction));
+        });
+      },
+    });
+  }
+
   update(time, delta) {
-    // Camera panning until player movement (game:move) exists.
+    if (this.arrow) {
+      this.arrow.setPosition(this.mine.x, this.mine.y - 12 + Math.sin(time / 150));
+    }
+
+    // Free camera only in the ?test=map preview; in a game the keys walk your character.
+    if (!this.debug) return;
     const { W, A, S, D, UP, LEFT, DOWN, RIGHT } = this.keys;
     const camera = this.cameras.main;
     const step = (PAN_SPEED * delta) / 1000 / camera.zoom;

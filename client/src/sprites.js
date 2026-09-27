@@ -19,3 +19,19 @@ export function characterFrame(appearanceId, direction = 'down', step = 0) {
 }
 
 export const flipForDirection = (direction) => direction === 'right';
+
+export const walkAnimationKey = (appearanceId, direction) => `${appearanceId}-walk-${direction}`;
+
+// Called once in PreloadScene. Walk cycle: step, idle, other step, idle.
+export function createCharacterAnimations(anims) {
+  for (const appearanceId of Object.keys(APPEARANCE_ROWS)) {
+    for (const direction of Object.keys(DIRECTION_COLUMNS)) {
+      anims.create({
+        key: walkAnimationKey(appearanceId, direction),
+        frames: [1, 0, 2, 0].map((step) => ({ key: 'kenney', frame: characterFrame(appearanceId, direction, step) })),
+        frameRate: 8,
+        repeat: -1,
+      });
+    }
+  }
+}
