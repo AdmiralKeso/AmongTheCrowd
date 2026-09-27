@@ -1,9 +1,12 @@
 import { randomInt } from 'node:crypto';
+import { CIRCLES, OBJECTIVE_TYPES } from '../shared/objectives.js';
 
-// Everyone moves on the tile grid at the same speed, and every step starts on a tick,
-// so a player's movement looks exactly like an NPC's (in timing and in network messages).
+// Everyone moves on the tile grid at the same speed, and every step and action starts on a tick,
+// so a player looks exactly like an NPC (in timing and in network messages).
 export const TICK_MS = 50;
 export const STEP_TICKS = 5; // 250 ms per tile
+export const ACTION_TICKS = 60; // 3 s standing still for a spot action (sit, look, ...)
+const CIRCLE_LAPS = 2;
 
 export const DIRECTIONS = {
   up: [0, -1],
@@ -12,16 +15,28 @@ export const DIRECTIONS = {
   right: [1, 0],
 };
 
-// NPC behaviour (in ticks)
+// Square laps of 2×2 tiles, tried in this order until one fits.
+const CIRCLE_ROUTES = [
+  ['right', 'down', 'left', 'up'],
+  ['left', 'down', 'right', 'up'],
+  ['right', 'up', 'left', 'down'],
+  ['left', 'up', 'right', 'down'],
+];
+
+// NPC behaviour (in ticks unless noted)
 const IDLE_MIN = 20; // 1 s
 const IDLE_MAX = 120; // 6 s
 const LOOK_AROUND_CHANCE = 60; // 1 in N ticks while idle
-const GIVE_UP_WHEN_BLOCKED = 20; // 1 s stuck behind someone -> pick a new destination
+const RUN_CIRCLES_CHANCE = 600; // 1 in N ticks while idle
+const DO_SPOT_ACTION_PERCENT = 70; // after arriving on an objective spot
+const GIVE_UP_WHEN_BLOCKED = 20; // 1 s stuck behind someone -> give up
 const WANDER_RADIUS = 8; // tiles, for destinations that aren't NPC points
 
-// Starts the game loop. emit(event, payload) sends to everyone in the game.
-// Returns a stop function.
-export function startSimulation(game, map, emit) {
+// Starts the game loop.
+//   emit(event, payload): send to everyone in the game
+//   emitToPlayer(playerId, event, payload): send to one player
+// Returns { stop, interact, runCircles }.
+export function startSimulation(game, map, { emit, emitToPlayer }) {
   const tileIndex = (tx, ty) => ty * map.width + tx;
   const inBounds = (tx, ty) => tx >= 0 && ty >= 0 && tx < map.width && ty < map.height;
   const walkable = (tx, ty) => inBounds(tx, ty) && !map.blocked[tileIndex(tx, ty)];
@@ -63,6 +78,64 @@ export function startSimulation(game, map, emit) {
     emitMove(c, STEP_TICKS * TICK_MS);
     return true;
   };
+
+  // --- Activities (objective actions), the same for players and NPCs ---
+
+  const circleRoute = (c) => {
+    const fits = (route) => {
+      let { tx, ty } = c;
+      return route.every((d) => {
+        tx += DIRECTIONS[d][0];
+        ty += DIRECTIONS[d][1];
+        return walkable(tx, ty);
+      });
+    };
+    const route = CIRCLE_ROUTES.find(fits);
+    return route ? Array(CIRCLE_LAPS).fill(route).flat() : null;
+  };
+
+  const startSpotAction = (c, spot) => {
+    const { action, facing } = OBJECTIVE_TYPES[spot.type];
+    c.direction = facing;
+    c.activity = spot.type;
+    c.actionTicksLeft = ACTION_TICKS;
+    emit('character:action', { characterId: c.id, action, direction: facing, duration: ACTION_TICKS * TICK_MS });
+  };
+
+  const startCircles = (c) => {
+    const steps = circleRoute(c);
+    if (!steps) return;
+    c.activity = CIRCLES;
+    c.script = { steps, blockedTicks: 0 };
+  };
+
+  const finishActivity = (c) => {
+    const type = c.activity;
+    c.activity = null;
+    if (!c.playerId) return;
+    const objective = game.players.get(c.playerId)?.objectives?.find((o) => o.type === type && !o.done);
+    if (!objective) return; // allowed: hiders may do any action to blend in
+    objective.done = true;
+    emitToPlayer(c.playerId, 'game:objective', { objectiveId: objective.objectiveId, done: true });
+  };
+
+  const runScript = (c) => {
+    const script = c.script;
+    if (script.steps.length === 0) {
+      c.script = null;
+      finishActivity(c);
+    } else if (tryStep(c, script.steps[0])) {
+      script.steps.shift();
+      script.blockedTicks = 0;
+    } else if (++script.blockedTicks > GIVE_UP_WHEN_BLOCKED) {
+      c.script = null;
+      c.activity = null; // interrupted: doesn't count
+    }
+  };
+
+  const isBusy = (c) => c.queued || c.actionTicksLeft > 0 || c.script;
+
+  // --- NPC behaviour ---
 
   // Breadth-first search on the tile grid (ignores other characters). Returns tiles to walk, excluding the start.
   const findPath = (fromX, fromY, toX, toY) => {
@@ -107,9 +180,19 @@ export function startSimulation(game, map, emit) {
     const { ai } = c;
 
     if (ai.path.length === 0) {
+      if (ai.arrived) {
+        ai.arrived = false;
+        const spot = map.objectiveAt(c.tx, c.ty);
+        if (spot && randomInt(100) < DO_SPOT_ACTION_PERCENT) {
+          startSpotAction(c, spot);
+          return;
+        }
+      }
       if (ai.idleTicks > 0) {
         ai.idleTicks--;
-        if (randomInt(LOOK_AROUND_CHANCE) === 0) {
+        if (randomInt(RUN_CIRCLES_CHANCE) === 0) {
+          startCircles(c);
+        } else if (randomInt(LOOK_AROUND_CHANCE) === 0) {
           const directions = Object.keys(DIRECTIONS);
           turn(c, directions[randomInt(directions.length)]);
         }
@@ -130,15 +213,38 @@ export function startSimulation(game, map, emit) {
     if (direction && tryStep(c, direction)) {
       ai.path.shift();
       ai.blockedTicks = 0;
+      if (ai.path.length === 0) ai.arrived = true;
     } else if (++ai.blockedTicks > GIVE_UP_WHEN_BLOCKED || !direction) {
       ai.path = [];
       ai.blockedTicks = 0;
     }
   };
 
+  // --- Game loop ---
+
   const tick = () => {
     for (const c of game.characters.values()) {
       if (c.stepTicksLeft > 0 && --c.stepTicksLeft > 0) continue; // still walking
+      if (c.actionTicksLeft > 0) {
+        if (--c.actionTicksLeft === 0) finishActivity(c);
+        continue;
+      }
+      if (c.script) {
+        runScript(c);
+        continue;
+      }
+      if (c.queued) {
+        // Player activities start here, on a tick, like NPC ones.
+        const queued = c.queued;
+        c.queued = null;
+        if (queued === CIRCLES) {
+          startCircles(c);
+        } else {
+          const spot = map.objectiveAt(c.tx, c.ty);
+          if (spot) startSpotAction(c, spot);
+        }
+        continue;
+      }
       if (c.playerId) {
         if (c.input) tryStep(c, c.input);
       } else {
@@ -157,11 +263,31 @@ export function startSimulation(game, map, emit) {
     timer = setTimeout(loop, Math.max(0, nextTickAt - performance.now()));
   };
   timer = setTimeout(loop, TICK_MS);
-  return () => clearTimeout(timer);
+
+  return {
+    stop: () => clearTimeout(timer),
+
+    // E: do the action of the spot the character is on (or is stepping onto).
+    // Returns an error message for the player, or null.
+    interact(c) {
+      if (isBusy(c)) return "You're already doing something";
+      if (!map.objectiveAt(c.tx, c.ty)) return 'There is nothing to do here';
+      c.queued = 'spot';
+      return null;
+    },
+
+    // R: run in circles right here.
+    runCircles(c) {
+      if (isBusy(c)) return "You're already doing something";
+      if (!circleRoute(c)) return 'Not enough room to run in circles here';
+      c.queued = CIRCLES;
+      return null;
+    },
+  };
 }
 
 function newAi() {
-  return { path: [], idleTicks: randomInt(IDLE_MAX), blockedTicks: 0 };
+  return { path: [], idleTicks: randomInt(IDLE_MAX), blockedTicks: 0, arrived: false };
 }
 
 // A player left mid-game: their character keeps going as an NPC, so it doesn't freeze and stand out.
@@ -171,5 +297,6 @@ export function releaseCharacter(game, playerId) {
   const c = game.characters.get(player.characterId);
   c.playerId = null;
   c.input = null;
+  c.queued = null;
   c.ai = newAi();
 }

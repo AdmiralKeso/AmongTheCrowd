@@ -17,7 +17,7 @@ export function registerLobbyHandlers(io, socket, lobbies) {
     if (!lobby) return null;
     socket.leave(lobby.code);
     if (lobby.game) {
-      if (lobby.players.size === 0) lobby.game.stopSimulation?.();
+      if (lobby.players.size === 0) lobby.game.sim?.stop();
       else releaseCharacter(lobby.game, playerId);
     }
     broadcast(lobby);

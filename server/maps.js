@@ -41,6 +41,14 @@ export function loadMap(name) {
   const policeSpawns = objects('spawns').filter((o) => o.type === 'police').map(({ x, y }) => ({ x, y }));
   if (policeSpawns.length === 0) throw new Error(`Map "${name}": needs at least one police spawn`);
 
+  // Objective spots by tile index. A spot is the tile its rectangle's top-left corner is on.
+  const objectiveSpots = new Map();
+  for (const o of objects('objectives')) {
+    const tx = Math.floor(o.x / tileSize);
+    const ty = Math.floor(o.y / tileSize);
+    objectiveSpots.set(ty * width + tx, { id: o.name, type: o.type, tx, ty });
+  }
+
   return {
     name,
     width,
@@ -49,7 +57,8 @@ export function loadMap(name) {
     blocked,
     crowdSpawns,
     policeSpawns,
-    objectives: objects('objectives').map((o) => ({ objectiveId: o.name, type: o.type, x: o.x, y: o.y, width: o.width, height: o.height })),
+    objectiveAt: (tx, ty) => objectiveSpots.get(ty * width + tx) ?? null,
+    objectiveTypes: [...new Set([...objectiveSpots.values()].map((o) => o.type))],
     npcPoints: objects('npcPoints').map(({ type, x, y }) => ({ type, x, y })),
   };
 }

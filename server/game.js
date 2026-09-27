@@ -1,5 +1,6 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import { CROWD_APPEARANCES, POLICE_APPEARANCE } from '../shared/appearances.js';
+import { CIRCLES } from '../shared/objectives.js';
 import { LobbyError } from './lobbies.js';
 
 export const OBJECTIVES_PER_HIDER = 3; // TBD: final number
@@ -39,6 +40,10 @@ export function createGame(lobby, map) {
       direction: 'down',
       stepTicksLeft: 0,
       input: null, // direction a player is holding (see game:move)
+      queued: null, // activity to start on the next tick: 'spot' or 'circles'
+      activity: null, // objective type being done right now
+      actionTicksLeft: 0, // standing still doing a spot action
+      script: null, // steps being walked automatically (running in circles)
     });
     return id;
   };
@@ -54,8 +59,9 @@ export function createGame(lobby, map) {
     const appearanceId = CROWD_APPEARANCES[randomInt(CROWD_APPEARANCES.length)];
     const characterId = addCharacter(playerId ? 'hider' : 'npc', playerId, appearanceId, spawns[i]);
     if (playerId) {
-      const objectives = shuffle(map.objectives).slice(0, OBJECTIVES_PER_HIDER)
-        .map(({ objectiveId, type }) => ({ objectiveId, type, done: false }));
+      // Different types per hider; any spot of that type counts, so objectiveId is the type.
+      const objectives = shuffle([...map.objectiveTypes, CIRCLES]).slice(0, OBJECTIVES_PER_HIDER)
+        .map((type) => ({ objectiveId: type, type, done: false }));
       players.set(playerId, { role: 'hider', characterId, objectives });
     }
   });
