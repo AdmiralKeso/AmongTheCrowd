@@ -1,4 +1,5 @@
 import { randomInt } from 'node:crypto';
+import { WRONG_ARREST_COST } from '../shared/gameRules.js';
 import { CIRCLES, OBJECTIVE_TYPES } from '../shared/objectives.js';
 
 // Everyone moves on the tile grid at the same speed, and every step and action starts on a tick,
@@ -35,8 +36,9 @@ const WANDER_RADIUS = 8; // tiles, for destinations that aren't NPC points
 // Starts the game loop.
 //   emit(event, payload): send to everyone in the game
 //   emitToPlayer(playerId, event, payload): send to one player
+//   onTimeUp(): called once when game.endsAt has passed (the loop has already stopped)
 // Returns { stop, interact, runCircles }.
-export function startSimulation(game, map, { emit, emitToPlayer }) {
+export function startSimulation(game, map, { emit, emitToPlayer, onTimeUp }) {
   const tileIndex = (tx, ty) => ty * map.width + tx;
   const inBounds = (tx, ty) => tx >= 0 && ty >= 0 && tx < map.width && ty < map.height;
   const walkable = (tx, ty) => inBounds(tx, ty) && !map.blocked[tileIndex(tx, ty)];
@@ -224,6 +226,7 @@ export function startSimulation(game, map, { emit, emitToPlayer }) {
 
   const tick = () => {
     for (const c of game.characters.values()) {
+      if (c.arrested) continue;
       if (c.stepTicksLeft > 0 && --c.stepTicksLeft > 0) continue; // still walking
       if (c.actionTicksLeft > 0) {
         if (--c.actionTicksLeft === 0) finishActivity(c);
@@ -257,15 +260,26 @@ export function startSimulation(game, map, { emit, emitToPlayer }) {
   // the duration clients animate. Schedule each tick against the clock instead.
   let nextTickAt = performance.now() + TICK_MS;
   let timer;
+  let stopped = false;
+  const stop = () => {
+    stopped = true;
+    clearTimeout(timer);
+  };
   const loop = () => {
+    if (Date.now() >= game.endsAt) {
+      stop();
+      onTimeUp();
+      return;
+    }
     tick();
+    if (stopped) return;
     nextTickAt += TICK_MS;
     timer = setTimeout(loop, Math.max(0, nextTickAt - performance.now()));
   };
   timer = setTimeout(loop, TICK_MS);
 
   return {
-    stop: () => clearTimeout(timer),
+    stop,
 
     // E: do the action of the spot the character is on (or is stepping onto).
     // Returns an error message for the player, or null.
@@ -282,6 +296,30 @@ export function startSimulation(game, map, { emit, emitToPlayer }) {
       if (!circleRoute(c)) return 'Not enough room to run in circles here';
       c.queued = CIRCLES;
       return null;
+    },
+
+    // Police E: arrest whoever is on the tile the police is facing.
+    // The arrested character is removed from the map (kept in game.characters with arrested: true).
+    // Returns { error } or { wasPlayer }.
+    arrest(police) {
+      if (game.tokens <= 0) return { error: "You're out of tokens and can't arrest anymore" };
+      const [dx, dy] = DIRECTIONS[police.direction];
+      const targetTile = tileIndex(police.tx + dx, police.ty + dy);
+      const target = game.characters.get(occupied.get(targetTile));
+      if (!target) return { error: 'There is nobody in front of you' };
+
+      occupied.delete(targetTile);
+      Object.assign(target, { arrested: true, input: null, queued: null, script: null, activity: null, actionTicksLeft: 0 });
+
+      const player = target.playerId && game.players.get(target.playerId);
+      const wasPlayer = player?.role === 'hider';
+      if (wasPlayer) {
+        player.arrested = true;
+      } else {
+        game.tokens = Math.max(0, game.tokens - WRONG_ARREST_COST);
+      }
+      emit('game:arrested', { characterId: target.id, wasPlayer });
+      return { wasPlayer };
     },
   };
 }

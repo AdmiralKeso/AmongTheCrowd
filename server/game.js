@@ -48,8 +48,14 @@ export function createGame(lobby, map) {
     return id;
   };
 
+  const nameOf = (playerId) => lobby.players.get(playerId).name; // kept for the results, even if they leave
+
   const policeSpawn = map.policeSpawns[randomInt(map.policeSpawns.length)];
-  players.set(policeId, { role: 'police', characterId: addCharacter('police', policeId, POLICE_APPEARANCE, policeSpawn) });
+  players.set(policeId, {
+    role: 'police',
+    name: nameOf(policeId),
+    characterId: addCharacter('police', policeId, POLICE_APPEARANCE, policeSpawn),
+  });
 
   // Hiders and NPCs are mixed before they get positions and appearances from the same pools,
   // so nothing about where or how a character starts gives away a player.
@@ -62,7 +68,7 @@ export function createGame(lobby, map) {
       // Different types per hider; any spot of that type counts, so objectiveId is the type.
       const objectives = shuffle([...map.objectiveTypes, CIRCLES]).slice(0, OBJECTIVES_PER_HIDER)
         .map((type) => ({ objectiveId: type, type, done: false }));
-      players.set(playerId, { role: 'hider', characterId, objectives });
+      players.set(playerId, { role: 'hider', name: nameOf(playerId), characterId, objectives, arrested: false });
     }
   });
 
@@ -83,6 +89,26 @@ export function publicState(game) {
     endsAt: game.endsAt,
     characters: [...game.characters.values()].map(({ id, appearanceId, x, y, direction }) => ({ characterId: id, appearanceId, x, y, direction })),
   };
+}
+
+// `game:ended` — the reveal. Called when the round is over.
+// A hider wins by finishing all their objectives without being arrested (and still being in the game).
+// The police wins if no hider won.
+export function gameResults(game, reason) {
+  const results = [...game.players.entries()].map(([playerId, p]) => {
+    const left = game.characters.get(p.characterId).playerId !== playerId;
+    const result = { playerId, name: p.name, role: p.role, characterId: p.characterId, left };
+    if (p.role === 'hider') {
+      result.objectivesDone = p.objectives.filter((o) => o.done).length;
+      result.objectivesTotal = p.objectives.length;
+      result.arrested = p.arrested;
+      result.won = !left && !p.arrested && result.objectivesDone === result.objectivesTotal;
+    }
+    return result;
+  });
+  const policeWon = !results.some((r) => r.won);
+  for (const r of results) if (r.role === 'police') r.won = policeWon && !r.left;
+  return { reason, policeWon, results };
 }
 
 // `game:role` — only for that player.

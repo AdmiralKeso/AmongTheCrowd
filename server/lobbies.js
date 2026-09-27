@@ -94,6 +94,12 @@ export class LobbyManager {
     return lobby;
   }
 
+  // Back to the lobby after a round; everyone has to ready up again.
+  finishGame(lobby) {
+    lobby.game = null;
+    for (const player of lobby.players.values()) player.ready = false;
+  }
+
   getByPlayer(playerId) {
     const code = this.#playerLobby.get(playerId);
     return code ? this.#lobbies.get(code) : null;
