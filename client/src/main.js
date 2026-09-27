@@ -3,6 +3,8 @@ import { BootScene } from './scenes/BootScene.js';
 import { PreloadScene } from './scenes/PreloadScene.js';
 import { MenuScene } from './scenes/MenuScene.js';
 import { LobbyScene } from './scenes/LobbyScene.js';
+import { GameScene } from './scenes/GameScene.js';
+import { UIScene } from './scenes/UIScene.js';
 
 new Phaser.Game({
   type: Phaser.AUTO,
@@ -15,5 +17,5 @@ new Phaser.Game({
     height: window.innerHeight,
   },
   dom: { createContainer: true }, // HTML UI panels (forms, lists) on top of the canvas
-  scene: [BootScene, PreloadScene, MenuScene, LobbyScene],
+  scene: [BootScene, PreloadScene, MenuScene, LobbyScene, GameScene, UIScene],
 });

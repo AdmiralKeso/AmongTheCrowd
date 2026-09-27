@@ -11,14 +11,20 @@ export class PreloadScene extends Phaser.Scene {
     this.add.rectangle(width / 2, height / 2, 304, 16).setStrokeStyle(2, 0xffffff);
     this.load.on('progress', (value) => { bar.width = 300 * value; });
 
-    // Load all sprites, tilesets and maps here, e.g.:
-    // this.load.spritesheet('civilian1', 'assets/sprites/civilian1.png', { frameWidth: 16, frameHeight: 16 });
-    // this.load.image('city-tiles', 'assets/tilesets/city.png');
-    // this.load.tilemapTiledJSON('city', 'assets/maps/city.json');
+    this.load.image('city-tiles', 'assets/tilesets/city.png');
+    // Same Kenney sheet, cut into 16×16 frames for characters (see src/sprites.js).
+    this.load.spritesheet('kenney', 'assets/tilesets/city.png', { frameWidth: 16, frameHeight: 16 });
+    this.load.tilemapTiledJSON('city', 'assets/maps/city.json');
   }
 
   create() {
     // Create animations here with this.anims.create(...)
+
+    // Dev shortcut: http://localhost:3000/?test=map opens the map with debug overlay.
+    if (new URLSearchParams(location.search).get('test') === 'map') {
+      this.scene.start('GameScene', { debug: true });
+      return;
+    }
     this.scene.start('MenuScene');
   }
 }

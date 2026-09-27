@@ -50,14 +50,24 @@ export class LobbyScene extends Phaser.Scene {
     const onState = (lobby) => { this.lobby = lobby; this.render(); };
     const onKicked = () => this.scene.start('MenuScene', { message: 'You were kicked from the lobby' });
     const onDisconnect = () => this.scene.start('MenuScene', { message: 'Lost connection to the server' });
+    // On game:start the server sends game:role (and game:tokens to the police) before game:state.
+    const onRole = (role) => { this.role = role; };
+    const onTokens = ({ tokens }) => { this.tokens = tokens; };
+    const onGameState = (state) => {
+      this.scene.start('GameScene', { role: this.role, tokens: this.tokens, state });
+    };
 
-    socket.on('lobby:state', onState);
-    socket.on('lobby:kicked', onKicked);
-    socket.on('disconnect', onDisconnect);
+    const listeners = {
+      'lobby:state': onState,
+      'lobby:kicked': onKicked,
+      disconnect: onDisconnect,
+      'game:role': onRole,
+      'game:tokens': onTokens,
+      'game:state': onGameState,
+    };
+    for (const [event, fn] of Object.entries(listeners)) socket.on(event, fn);
     this.events.once('shutdown', () => {
-      socket.off('lobby:state', onState);
-      socket.off('lobby:kicked', onKicked);
-      socket.off('disconnect', onDisconnect);
+      for (const [event, fn] of Object.entries(listeners)) socket.off(event, fn);
     });
 
     this.render();
@@ -123,8 +133,9 @@ export class LobbyScene extends Phaser.Scene {
         this.scene.start('MenuScene');
         break;
       case 'start':
-        // TODO: send game:start once the game itself exists.
-        this.errorText.textContent = 'Starting the game is not built yet';
+        button.disabled = true;
+        this.showError(await request('game:start'));
+        if (this.sys.isActive()) this.render(); // re-enable if the start failed
         break;
     }
   }
