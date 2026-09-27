@@ -9,13 +9,17 @@ Real-time multiplayer hide-in-the-crowd game (one police vs. hiders disguised as
 - Tests: not set up yet
 
 ## Architecture
-- `server/index.js` — Express app + Socket.IO server; serves `client/` as static files
+- `server/index.js` — Express app + Socket.IO server; serves `client/` and `shared/` as static files
+- `server/lobbies.js` — in-memory `LobbyManager` (lobby logic, validation); throws `LobbyError` with player-facing messages
+- `server/handlers/` — Socket.IO event handlers, one file per namespace (e.g. `lobby.js`)
+- `shared/` — code used by both server and client (e.g. `lobbyRules.js`: player limits, settings min/max/defaults). Client imports it as `/shared/...`
 - `client/` — Phaser frontend (`client/src/scenes/`, `client/assets/`)
 - **No bundler (no Vite/webpack).** The client is plain ES modules loaded directly by the browser
   - An import map in `client/index.html` maps `phaser` → `/vendor/phaser/phaser.esm.js` (served from `node_modules/phaser/dist`) and `socket.io-client` → `/socket.io/socket.io.esm.min.js` (served by Socket.IO)
   - Import with `import * as Phaser from 'phaser'` and `import { io } from 'socket.io-client'`
   - Relative imports must include the `.js` extension
-  - Use `client/src/socket.js` for the one shared socket connection; don't call `io()` elsewhere
+  - Use `client/src/socket.js` for the one shared socket connection; don't call `io()` elsewhere. Use its `request(event, payload)` for client → server events (returns `{ ok, ... }`)
+  - Menus and forms are HTML panels on top of the canvas (Phaser DOM elements, `addCenteredPanel` in `client/src/ui.js`, styles in `client/ui.css`). Always `escapeHtml` player-provided text
 - `"type": "module"`: server code also uses `import`, not `require`
 
 ## Game objectives
@@ -114,11 +118,11 @@ Client → server requests use Socket.IO acknowledgements: `callback({ ok: true,
 ### Client → server
 | Event | Payload | Notes |
 |---|---|---|
-| `lobby:create` | `{ name }` | Host creates lobby; ack returns `{ code }` |
-| `lobby:join` | `{ code, name }` | Join by room code |
+| `lobby:create` | `{ name }` | Host creates lobby; ack returns `{ lobby }` (same shape as `lobby:state`) |
+| `lobby:join` | `{ code, name }` | Join by room code (case-insensitive); ack returns `{ lobby }` |
 | `lobby:leave` | – | |
 | `lobby:kick` | `{ playerId }` | Host only |
-| `lobby:settings` | `{ ...settings }` | Host only |
+| `lobby:settings` | `{ ...settings }` | Host only; validated against `shared/lobbyRules.js`; resets everyone's ready state |
 | `lobby:ready` | `{ ready }` | |
 | `game:start` | – | Host only, all players ready |
 | `game:move` | `{ x, y }` | Canvas position; server validates |
@@ -130,7 +134,8 @@ Client → server requests use Socket.IO acknowledgements: `callback({ ok: true,
 ### Server → client
 | Event | Payload | Sent to |
 |---|---|---|
-| `lobby:state` | `{ code, hostId, players, settings }` | Everyone in lobby |
+| `lobby:state` | `{ code, hostId, players: [{ id, name, ready }], settings }` | Everyone in lobby |
+| `lobby:kicked` | – | **Only the kicked player** |
 | `game:role` | `{ role, characterId?, objectives? }` | **Only that player** |
 | `game:state` | `{ characters: [{ characterId, appearanceId, x, y }], timeLeft, ... }` (no player mapping) | Everyone in game |
 | `game:phase` | `{ phase, endsAt }` | Everyone in game |
@@ -143,6 +148,7 @@ Client → server requests use Socket.IO acknowledgements: `callback({ ok: true,
 
 ## Current focus
 - Main menu (Create a lobby, Join a lobby, Settings, Profile (Create account, login))
-- [ ] Lobby + room codes
+- [x] Lobby + room codes (create/join, ready, kick, host settings, host hand-over)
+- [ ] `game:start` (button exists, server handler not built yet)
 - Sprite integration for canvas
 - Setting up socket connections

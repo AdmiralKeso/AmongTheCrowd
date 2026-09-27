@@ -1,0 +1,59 @@
+.panel {
+  width: min(420px, 90vw);
+  padding: 24px;
+  box-sizing: border-box;
+  background: #262626;
+  border: 2px solid #444;
+  border-radius: 8px;
+  color: #eee;
+  font: 16px/1.4 monospace;
+}
+
+.panel h1 { margin: 0 0 4px; font-size: 28px; text-align: center; }
+.panel h2 { margin: 16px 0 8px; font-size: 16px; color: #aaa; }
+.panel .subtitle { margin: 0 0 16px; text-align: center; color: #888; font-size: 14px; }
+
+.panel label { display: block; margin: 8px 0 4px; font-size: 14px; color: #bbb; }
+.panel input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  background: #1a1a1a;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #fff;
+  font: inherit;
+}
+.panel input:disabled { color: #888; }
+.panel .code-input { text-transform: uppercase; letter-spacing: 4px; }
+
+.panel .row { display: flex; gap: 8px; margin-top: 8px; }
+.panel .row > * { flex: 1; }
+
+.panel button {
+  padding: 10px;
+  background: #3a6ea5;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+.panel button:hover:not(:disabled) { background: #4a82bd; }
+.panel button:disabled { background: #444; color: #888; cursor: default; }
+.panel button.secondary { background: #555; }
+.panel button.secondary:hover:not(:disabled) { background: #666; }
+.panel button.small { flex: none; padding: 2px 8px; font-size: 13px; background: #8a3a3a; }
+
+.panel .divider { margin: 16px 0; text-align: center; color: #666; font-size: 13px; }
+.panel .error { min-height: 1.4em; margin-top: 12px; color: #ff7b7b; font-size: 14px; text-align: center; }
+.panel .hint { margin-top: 8px; color: #888; font-size: 13px; text-align: center; }
+
+.panel .code { font-size: 32px; letter-spacing: 8px; text-align: center; color: #ffd966; }
+
+.panel ul { margin: 0; padding: 0; list-style: none; }
+.panel li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #333; }
+.panel li .name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.panel .tag { font-size: 12px; padding: 1px 6px; border-radius: 3px; background: #444; }
+.panel .tag.host { background: #7a5c00; }
+.panel .tag.ready { background: #2f6b3a; }

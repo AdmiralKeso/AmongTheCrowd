@@ -2,6 +2,8 @@ import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Server } from 'socket.io';
+import { LobbyManager } from './lobbies.js';
+import { registerLobbyHandlers } from './handlers/lobby.js';
 
 const PORT = process.env.PORT || 3000;
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -13,9 +15,13 @@ const io = new Server(httpServer);
 // No bundler: serve the client as-is and expose Phaser's ESM build.
 app.use(express.static(root + 'client'));
 app.use('/vendor/phaser', express.static(root + 'node_modules/phaser/dist'));
+app.use('/shared', express.static(root + 'shared'));
+
+const lobbies = new LobbyManager();
 
 io.on('connection', (socket) => {
   console.log(`connected: ${socket.id}`);
+  registerLobbyHandlers(io, socket, lobbies);
 
   socket.on('disconnect', () => {
     console.log(`disconnected: ${socket.id}`);
