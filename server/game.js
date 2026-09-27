@@ -28,7 +28,18 @@ export function createGame(lobby, map) {
   const addCharacter = (kind, playerId, appearanceId, { x, y }) => {
     let id;
     do { id = randomBytes(4).toString('hex'); } while (characters.has(id)); // random ids: order reveals nothing
-    characters.set(id, { id, kind, playerId, appearanceId, x, y });
+    // Characters always stand in the middle of a tile.
+    const tx = Math.floor(x / map.tileSize);
+    const ty = Math.floor(y / map.tileSize);
+    characters.set(id, {
+      id, kind, playerId, appearanceId,
+      tx, ty,
+      x: tx * map.tileSize + map.tileSize / 2,
+      y: ty * map.tileSize + map.tileSize / 2,
+      direction: 'down',
+      stepTicksLeft: 0,
+      input: null, // direction a player is holding (see game:move)
+    });
     return id;
   };
 
@@ -64,7 +75,7 @@ export function publicState(game) {
   return {
     phase: game.phase,
     endsAt: game.endsAt,
-    characters: [...game.characters.values()].map(({ id, appearanceId, x, y }) => ({ characterId: id, appearanceId, x, y })),
+    characters: [...game.characters.values()].map(({ id, appearanceId, x, y, direction }) => ({ characterId: id, appearanceId, x, y, direction })),
   };
 }
 

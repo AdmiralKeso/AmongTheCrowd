@@ -1,4 +1,5 @@
 import { lobbyState } from '../lobbies.js';
+import { releaseCharacter } from '../simulation.js';
 import { onRequest } from './ack.js';
 
 export function registerLobbyHandlers(io, socket, lobbies) {
@@ -9,6 +10,19 @@ export function registerLobbyHandlers(io, socket, lobbies) {
   };
 
   const on = (event, handler) => onRequest(socket, event, handler);
+
+  // Used for leaving and disconnecting. Returns the lobby that was left, or null.
+  const leave = () => {
+    const lobby = lobbies.leave(playerId);
+    if (!lobby) return null;
+    socket.leave(lobby.code);
+    if (lobby.game) {
+      if (lobby.players.size === 0) lobby.game.stopSimulation?.();
+      else releaseCharacter(lobby.game, playerId);
+    }
+    broadcast(lobby);
+    return lobby;
+  };
 
   on('lobby:create', ({ name }) => {
     const lobby = lobbies.create(playerId, name);
@@ -24,11 +38,7 @@ export function registerLobbyHandlers(io, socket, lobbies) {
   });
 
   on('lobby:leave', () => {
-    const lobby = lobbies.leave(playerId);
-    if (lobby) {
-      socket.leave(lobby.code);
-      broadcast(lobby);
-    }
+    leave();
     return {};
   });
 
@@ -53,8 +63,5 @@ export function registerLobbyHandlers(io, socket, lobbies) {
     return {};
   });
 
-  socket.on('disconnect', () => {
-    const lobby = lobbies.leave(playerId);
-    if (lobby) broadcast(lobby);
-  });
+  socket.on('disconnect', leave);
 }
