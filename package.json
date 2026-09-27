@@ -9,5 +9,6 @@
   "scripts": {
     "dev": "node --watch server/index.js",
     "start": "node server/index.js"
-  }
+  },
+  "license": "MIT"
 }
