@@ -13,6 +13,7 @@ Real-time multiplayer hide-in-the-crowd game (one police vs. hiders disguised as
 - `server/index.js` — Express app + Socket.IO server; serves `client/` and `shared/` as static files
 - `server/lobbies.js` — in-memory `LobbyManager` (lobby logic, validation); throws `LobbyError` with player-facing messages
 - `server/game.js` — `createGame` (roles, characters, objectives), `publicState` (safe for everyone), `roleFor` (private per player). The game object lives on `lobby.game`
+- `server/simulation.js` — game loop (50 ms ticks): tile-based movement, collision, NPC wandering (BFS paths to NPC points)
 - `server/maps.js` — `loadMap(name)` reads the same Tiled JSON the client renders (collision, spawns, objectives, NPC points)
 - `server/handlers/` — Socket.IO event handlers, one file per namespace (`lobby.js`, `game.js`); `ack.js` has `onRequest` for acknowledged requests
 - `shared/` — code used by both server and client (e.g. `lobbyRules.js`: player limits, settings min/max/defaults). Client imports it as `/shared/...`
@@ -61,6 +62,15 @@ Hide-in-the-crowd game. One player is the **Police**; all other players are **Hi
 - Tokens are spent on abilities and calling in backup (TBD: list of abilities, backup and their costs)
 - The server tracks tokens; the client only displays them
 - TBD: can tokens be earned (e.g. by arresting a hider)? What happens at 0 tokens?
+
+### Movement
+- Everyone (police, hiders, NPCs) moves one tile at a time, 4 directions, 250 ms per tile (`STEP_TICKS` × `TICK_MS` in `server/simulation.js`)
+- Players only send the held direction; every step starts on a server tick, so step timing is identical for players and NPCs
+- A character can't walk into collision tiles or a tile another character is on or moving to
+- Blocked: the character turns to face that way instead (also sent as `character:moved`, `duration: 0`)
+- NPCs: idle 1–6 s (sometimes turning to look around), then walk to a random NPC point or a nearby tile
+- A player who leaves mid-game: their character is taken over by NPC behaviour so it doesn't freeze and stand out
+- Client: tweens each step over `duration` and plays the walk animation; the camera follows your own character
 
 ### Hidden-info rules (critical)
 - The police client must never be able to tell a hider from an NPC through network data
@@ -126,7 +136,7 @@ Hide-in-the-crowd game. One player is the **Police**; all other players are **Hi
 - Never send hidden info (e.g. which characters are players) to clients that shouldn't see it
 
 ## Socket events
-Client → server requests use Socket.IO acknowledgements: `callback({ ok: true, ... })` or `callback({ ok: false, error })`.
+Client → server requests use Socket.IO acknowledgements: `callback({ ok: true, ... })` or `callback({ ok: false, error })`. Exception: `game:move` is fire-and-forget (no ack), because it's sent often.
 
 ### Client → server
 | Event | Payload | Notes |
@@ -138,7 +148,7 @@ Client → server requests use Socket.IO acknowledgements: `callback({ ok: true,
 | `lobby:settings` | `{ ...settings }` | Host only; validated against `shared/lobbyRules.js`; resets everyone's ready state |
 | `lobby:ready` | `{ ready }` | |
 | `game:start` | – | Host only, all players ready, at least `MIN_PLAYERS`. Server sends `game:role` to each player (+ `game:tokens` to police), then `game:state` to everyone |
-| `game:move` | `{ x, y }` | Canvas position; server validates |
+| `game:move` | `{ direction }` (`up`/`down`/`left`/`right`, or `null` to stop) | Sent when the held direction changes; server moves the character tile by tile |
 | `game:interact` | `{ objectId }` | Hider does an objective action; server validates range |
 | `game:arrest` | `{ characterId }` | Police only |
 | `game:ability` | `{ abilityId, targetId? }` | Police only; server checks and deducts tokens |
@@ -152,7 +162,7 @@ Client → server requests use Socket.IO acknowledgements: `callback({ ok: true,
 | `game:role` | `{ role, characterId, objectives? }` (`objectives: [{ objectiveId, type, done }]` for hiders) | **Only that player** |
 | `game:state` | `{ phase, endsAt, characters: [{ characterId, appearanceId, x, y }] }` (no player mapping; `endsAt` is a timestamp in ms) | Everyone in game |
 | `game:phase` | `{ phase, endsAt }` | Everyone in game |
-| `character:moved` | `{ characterId, x, y }` | Everyone in game (NPCs and hiders alike) |
+| `character:moved` | `{ characterId, x, y, direction, duration }` (`x, y` = target tile center; `duration` 0 = turned on the spot) | Everyone in game (NPCs and players alike) |
 | `game:objective` | `{ objectiveId, done }` | **Only that hider** |
 | `game:arrested` | `{ characterId, wasPlayer }` | Everyone in game |
 | `game:tokens` | `{ tokens }` | **Only the police** |
@@ -163,6 +173,7 @@ Client → server requests use Socket.IO acknowledgements: `callback({ ok: true,
 - Main menu (Create a lobby, Join a lobby, Settings, Profile (Create account, login))
 - [x] Lobby + room codes (create/join, ready, kick, host settings, host hand-over)
 - [x] `game:start`: roles, characters on the map, HUD (role, objectives, timer, tokens)
-- [ ] Movement (`game:move`, `character:moved`), NPC wandering, interacting, arresting, round end
+- [x] Movement (`game:move`, `character:moved`) and NPC wandering
+- [ ] Interacting with objectives, arresting, round end
 - Sprite integration for canvas
 - Setting up socket connections
